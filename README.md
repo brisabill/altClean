@@ -18,6 +18,8 @@ altClean(188, delete = FALSE)
 source("code_data_estraction.R")
 # JSON extraction + country PDF reporting (R)
 
-This script extracts model metadata and data-source information, it is dependent on the .Rmd file for pdf generation
+This script extracts model metadata and data-source information, it is dependent on the .Rmd file for pdf generation, it will create a folder named pdf_reports and place the created files within it
+# Usage:
+pdfReport(76)
 
 ---
