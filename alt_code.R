@@ -1,10 +1,3 @@
-# ============================================================
-# Map alts referenced in main JSON and compare to alt/ folder
-# + Compare results/ alts to dict main JSON
-# + Optional deletion (dry_run)
-# Execution style: runs on source (like your current script)
-# ============================================================
-
 suppressPackageStartupMessages({
   library(jsonlite)
   library(purrr)
@@ -15,8 +8,8 @@ suppressPackageStartupMessages({
 # -------------------------
 # SETTINGS
 # -------------------------
-dict_dir   <- "C:/Users/brisa/Documents/alt_code/dict"
-result_dir <- "C:/Users/brisa/Documents/alt_code/result"
+dict_dir   = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/dict",   winslash = "/", mustWork = FALSE),
+result_dir = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/result", winslash = "/", mustWork = FALSE)
 
 dry_run <- TRUE  # set to FALSE to actually delete
 
@@ -534,6 +527,3 @@ altClean <- function(countrycode,
   ))
 }
 
-# Example:
-altClean(188, delete = FALSE)
-# altClean(188, delete = TRUE)
