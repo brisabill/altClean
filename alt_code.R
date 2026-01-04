@@ -8,8 +8,8 @@ suppressPackageStartupMessages({
 # -------------------------
 # SETTINGS
 # -------------------------
-dict_dir   = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/dict",   winslash = "/", mustWork = FALSE),
-result_dir = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/result", winslash = "/", mustWork = FALSE)
+dict_dir   <- "C:/Users/mirandaa/Desktop/estican/estican/dict"
+result_dir <-"C:/Users/mirandaa/Desktop/estican/estican/result"
 
 dry_run <- TRUE  # set to FALSE to actually delete
 
@@ -428,9 +428,8 @@ cat("\nDONE. If you want to actually delete, set dry_run <- FALSE.\n")
 # altClean function
 # -------------------------
 altClean <- function(countrycode,
-                     delete = FALSE,
-                     dict_dir = "C:/Users/brisa/Documents/alt_code/dict",
-                     result_dir = "C:/Users/brisa/Documents/alt_code/result") {
+                     delete = FALSE)
+    {
   
   info <- jsonclean(countrycode, dict_dir)  # prints jsonclean block
   
