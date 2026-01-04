@@ -1,198 +1,115 @@
-# ============================================================
-# Alt mapping + comparison + cleanup (refactored)
-# ============================================================
-
 suppressPackageStartupMessages({
   library(jsonlite)
-  library(stringr)
   library(purrr)
+  library(stringr)
   library(data.table)
 })
 
 # -------------------------
-# CONFIG (set once)
+# SETTINGS
 # -------------------------
-cfg <- list(
-  dict_dir   = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/dict",   winslash = "/", mustWork = FALSE),
-  result_dir = normalizePath("C:/Users/mirandaa/Desktop/estican/estican/result", winslash = "/", mustWork = FALSE)
-)
+dict_dir   <- "C:/Users/mirandaa/Desktop/estican/estican/dict"
+result_dir <-"C:/Users/mirandaa/Desktop/estican/estican/result"
+
+dry_run <- TRUE  # set to FALSE to actually delete
 
 # -------------------------
-# Helpers: paths + IO
+# HELPERS
 # -------------------------
-get_region_dirs <- function(root_dir) {
-  if (!dir.exists(root_dir)) return(character(0))
-  dirs <- list.dirs(root_dir, recursive = FALSE, full.names = TRUE)
-  dirs[str_detect(basename(dirs), "^\\d+$")]
-}
 
 safe_fromJSON <- function(path) {
   tryCatch(
     jsonlite::fromJSON(path, simplifyVector = FALSE),
-    error = function(e) NULL
+    error = function(e) {
+      warning(sprintf("Failed to parse JSON: %s | %s", path, e$message), call. = FALSE)
+      NULL
+    }
   )
 }
 
-as_cc <- function(x) as.character(x)
-
-# Normalize alt strings (from JSON or filenames)
-norm_alt <- function(x) {
-  x <- unlist(x, recursive = TRUE, use.names = FALSE)
-  x <- as.character(x)
-  x <- str_trim(x)
-  x <- x[!is.na(x) & x != ""]
-  unique(x)
-}
-
-# -------------------------
-# Extract alts from main JSON (recursive)
-# -------------------------
+# Extract "alt" anywhere in nested JSON lists; alt can be string OR list
 extract_alts_from_main <- function(j) {
-  if (is.null(j) || !is.list(j)) return(character(0))
-  out <- character(0)
+  if (is.null(j)) return(character(0))
   
-  walk_rec <- function(x) {
-    if (!is.list(x)) return(invisible(NULL))
+  walk_collect <- function(x) {
+    if (!is.list(x)) return(character(0))
+    
+    found <- character(0)
     nms <- names(x)
     
     if (!is.null(nms) && "alt" %in% nms) {
-      out <<- c(out, norm_alt(x[["alt"]]))
+      v <- x[["alt"]]
+      v <- unlist(v, recursive = TRUE, use.names = FALSE)
+      v <- as.character(v)
+      v <- str_trim(v)
+      v <- v[!is.na(v) & v != ""]
+      found <- c(found, v)
     }
-    purrr::walk(x, walk_rec)
+    
+    kids <- purrr::map(x, walk_collect)
+    c(found, unlist(kids, use.names = FALSE))
   }
   
-  walk_rec(j)
-  unique(out)
+  unique(walk_collect(j))
 }
 
-# -------------------------
-# List alt files in dict/alt for a country
-# Accepts either: cc.json or cc_*.json
-# Returns stems without country prefix and without .json
-# -------------------------
+# List alt JSON files for a country (dict alt folder); drops "xx_" prefix and ".json"
 list_alt_files_for_country <- function(alt_dir, country_code) {
   if (!dir.exists(alt_dir)) return(character(0))
   
-  cc <- as_cc(country_code)
+  cc <- as.character(country_code)
   files <- list.files(alt_dir, pattern = "\\.json$", full.names = FALSE)
   
-  # keep only for this country code
+  # keep ONLY files that belong to this same country code (cc)
   files <- files[startsWith(files, paste0(cc, "_")) | files == paste0(cc, ".json")]
+  if (!length(files)) return(character(0))
+  
   stems <- str_remove(files, "\\.json$")
   stems <- str_remove(stems, paste0("^", cc, "_"))
   stems <- stems[!is.na(stems) & stems != ""]
   unique(stems)
 }
 
-# -------------------------
-# Dict scan: wide + long tables
-# -------------------------
-scan_dict <- function(dict_dir) {
+# Region dirs are numeric names, including "06", "09", etc.
+get_region_dirs <- function(dict_dir) {
+  dirs <- list.dirs(dict_dir, recursive = FALSE, full.names = TRUE)
+  dirs[str_detect(basename(dirs), "^\\d+$")]
+}
+
+# Find main JSON file for a country in dict_dir regions
+find_main_json <- function(dict_dir, countrynumber) {
+  cc <- as.character(countrynumber)
   region_dirs <- get_region_dirs(dict_dir)
   
-  wide <- rbindlist(lapply(region_dirs, function(rdir) {
-    region  <- basename(rdir)
-    alt_dir <- file.path(rdir, "alt")
-    
-    main_jsons <- list.files(rdir, pattern = "^\\d+\\.json$", full.names = TRUE)
-    
-    rbindlist(lapply(main_jsons, function(f) {
-      cc <- str_remove(basename(f), "\\.json$")
-      j  <- safe_fromJSON(f)
-      
-      country_label <- if (!is.null(j) && !is.null(j$country_label)) j$country_label else NA_character_
-      
-      alts_main     <- sort(extract_alts_from_main(j))
-      alts_folder   <- sort(list_alt_files_for_country(alt_dir, cc))
-      only_in_main  <- sort(setdiff(alts_main, alts_folder))
-      only_in_fold  <- sort(setdiff(alts_folder, alts_main))
-      
-      data.table(
-        region_folder = region,
-        country_code  = suppressWarnings(as.integer(cc)),
-        country_label = country_label,
-        main_json_path = f,
-        alt_dir = alt_dir,
-        
-        alts_in_main       = paste(alts_main, collapse = ", "),
-        alt_files          = paste(alts_folder, collapse = ", "),
-        only_in_main       = paste(only_in_main, collapse = ", "),
-        only_in_alt_folder = paste(only_in_fold, collapse = ", "),
-        
-        n_alts_in_main       = length(alts_main),
-        n_alt_files          = length(alts_folder),
-        n_only_in_main       = length(only_in_main),
-        n_only_in_alt_folder = length(only_in_fold)
-      )
-    }), fill = TRUE)
-  }), fill = TRUE)
+  for (rdir in region_dirs) {
+    candidate <- file.path(rdir, paste0(cc, ".json"))
+    if (file.exists(candidate)) {
+      return(list(main_path = candidate, region_hit = basename(rdir)))
+    }
+  }
   
-  long <- rbindlist(lapply(region_dirs, function(rdir) {
-    region  <- basename(rdir)
-    alt_dir <- file.path(rdir, "alt")
-    
-    main_jsons <- list.files(rdir, pattern = "^\\d+\\.json$", full.names = TRUE)
-    
-    rbindlist(lapply(main_jsons, function(f) {
-      cc <- str_remove(basename(f), "\\.json$")
-      j  <- safe_fromJSON(f)
-      
-      country_label <- if (!is.null(j) && !is.null(j$country_label)) j$country_label else NA_character_
-      
-      alts_main     <- extract_alts_from_main(j)
-      alts_folder   <- list_alt_files_for_country(alt_dir, cc)
-      all_alts      <- sort(unique(c(alts_main, alts_folder)))
-      if (!length(all_alts)) return(NULL)
-      
-      dt <- data.table(
-        region_folder = region,
-        country_code  = suppressWarnings(as.integer(cc)),
-        country_label = country_label,
-        alt = all_alts,
-        in_main   = all_alts %in% alts_main,
-        in_folder = all_alts %in% alts_folder
-      )
-      
-      dt[, status := fifelse(in_main & in_folder, "both",
-                             fifelse(in_main & !in_folder, "only_in_main",
-                                     fifelse(!in_main & in_folder, "only_in_alt_folder", "neither")))]
-      dt
-    }), fill = TRUE)
-  }), fill = TRUE)
-  
-  list(region_dirs = region_dirs, wide = wide, long = long)
+  stop("Could not find main JSON for country ", cc, call. = FALSE)
 }
 
-# -------------------------
-# Result parsing: extract alt + type from filenames
-# Expected pattern: cc_<alt>_[i|m]_...json
-# -------------------------
-parse_result_files <- function(files, cc) {
+# Parse results filenames (json/csv) and extract BASE alt (everything before _i/_m/_p block)
+parse_result_file_alt <- function(files, cc) {
   if (!length(files)) return(data.table())
   
-  file_noext <- str_remove(files, "\\.json$")
+  dt <- data.table(file = files)
+  dt[, file_noext := str_remove(file, "\\.(json|csv)$")]
+  dt[, after_cc   := str_remove(file_noext, paste0("^", cc, "_"))]
   
-  type <- fifelse(str_detect(file_noext, "_i_"), "i",
-                  fifelse(str_detect(file_noext, "_m_"), "m", NA_character_))
-  keep <- !is.na(type)
-  if (!any(keep)) return(data.table())
+  # base alt = everything before _i/_m/_p (and rest)
+  dt[, alt := str_replace(after_cc, "(_[imp](?:_|$).*)$", "")]
+  dt[, alt := str_trim(alt)]
+  dt <- dt[!is.na(alt) & alt != ""]
   
-  files <- files[keep]
-  file_noext <- file_noext[keep]
-  type <- type[keep]
-  
-  after_cc <- str_remove(file_noext, paste0("^", cc, "_"))
-  alt <- str_replace(after_cc, "(_[im]_.*)$", "")
-  alt <- norm_alt(alt)
-  
-  alt_per_file <- str_replace(after_cc, "(_[im]_.*)$", "")
-  alt_per_file <- str_trim(alt_per_file)
-  
-  data.table(file = files, alt = alt_per_file, type = type)[!is.na(alt) & alt != ""]
+  dt
 }
 
+# Extract alts/types from results folder (json only) to build compare table
 extract_result_alts_for_country <- function(region_dir_result, country_code) {
-  cc <- as_cc(country_code)
+  cc <- as.character(country_code)
   
   alt_dir <- file.path(region_dir_result, "alt")
   scan_dir <- if (dir.exists(alt_dir)) alt_dir else region_dir_result
@@ -202,272 +119,410 @@ extract_result_alts_for_country <- function(region_dir_result, country_code) {
   files <- files[startsWith(files, paste0(cc, "_"))]
   if (!length(files)) return(data.table())
   
-  dt <- parse_result_files(files, cc)
+  dt <- data.table(file = files)
+  dt[, file_noext := str_remove(file, "\\.json$")]
+  
+  dt[, type := fifelse(str_detect(file_noext, "_i_"), "i",
+                       fifelse(str_detect(file_noext, "_m_"), "m", NA_character_))]
+  dt <- dt[!is.na(type)]
+  
+  dt[, after_cc := str_remove(file_noext, paste0("^", cc, "_"))]
+  dt[, alt := str_replace(after_cc, "(_[im]_.*)$", "")]
+  dt[, alt := str_trim(alt)]
+  dt <- dt[alt != "" & !is.na(alt)]
+  
   unique(dt[, .(alt, type)])
 }
 
-scan_result <- function(result_dir, dict_region_dirs) {
-  rbindlist(lapply(dict_region_dirs, function(rdir_dict) {
-    region <- basename(rdir_dict)
+# -------------------------
+# MAIN TABLES (DICT)
+# -------------------------
+
+region_dirs <- get_region_dirs(dict_dir)
+
+res_list <- lapply(region_dirs, function(rdir) {
+  region  <- basename(rdir)              # can be "06"
+  alt_dir <- file.path(rdir, "alt")
+  
+  main_jsons <- list.files(rdir, pattern = "\\.json$", full.names = TRUE)
+  
+  rbindlist(lapply(main_jsons, function(f) {
+    cc <- str_remove(basename(f), "\\.json$")
+    j  <- safe_fromJSON(f)
     
-    # get country codes from dict main jsons so result scan aligns
-    main_jsons <- list.files(rdir_dict, pattern = "^\\d+\\.json$", full.names = TRUE)
+    country_label <- if (!is.null(j) && !is.null(j$country_label)) j$country_label else NA_character_
     
-    rdir_result <- file.path(result_dir, region)
-    if (!dir.exists(rdir_result)) return(NULL)
+    alts_main_vec     <- extract_alts_from_main(j)
+    alts_folder_vec   <- list_alt_files_for_country(alt_dir, cc)
+    only_in_main_vec  <- setdiff(alts_main_vec, alts_folder_vec)
+    only_in_fold_vec  <- setdiff(alts_folder_vec, alts_main_vec)
     
-    rbindlist(lapply(main_jsons, function(f) {
-      cc <- str_remove(basename(f), "\\.json$")
-      dt <- extract_result_alts_for_country(rdir_result, cc)
-      if (!nrow(dt)) return(NULL)
+    data.table(
+      region_folder = region,
+      country_code  = suppressWarnings(as.integer(cc)),
+      country_label = country_label,
       
-      data.table(
-        region_folder = region,
-        country_code  = suppressWarnings(as.integer(cc)),
-        alt  = dt$alt,
-        type = dt$type
-      )
-    }), fill = TRUE)
+      alts_in_main       = paste(sort(alts_main_vec), collapse = ", "),
+      alt_files          = paste(sort(alts_folder_vec), collapse = ", "),
+      only_in_main       = paste(sort(only_in_main_vec), collapse = ", "),
+      only_in_alt_folder = paste(sort(only_in_fold_vec), collapse = ", "),
+      
+      n_alts_in_main       = length(alts_main_vec),
+      n_alt_files          = length(alts_folder_vec),
+      n_only_in_main       = length(only_in_main_vec),
+      n_only_in_alt_folder = length(only_in_fold_vec)
+    )
   }), fill = TRUE)
-}
+})
+
+res <- rbindlist(res_list, fill = TRUE)
+
+# export
+#fwrite(res, file.path(dict_dir, "alt_mapping_comparison.csv"))
+
+# Long format (one alt per row)
+res_long <- rbindlist(lapply(region_dirs, function(rdir) {
+  region  <- basename(rdir)
+  alt_dir <- file.path(rdir, "alt")
+  
+  main_jsons <- list.files(rdir, pattern = "\\.json$", full.names = TRUE)
+  
+  rbindlist(lapply(main_jsons, function(f) {
+    cc <- str_remove(basename(f), "\\.json$")
+    j  <- safe_fromJSON(f)
+    
+    country_label <- if (!is.null(j) && !is.null(j$country_label)) j$country_label else NA_character_
+    
+    alts_main_vec   <- extract_alts_from_main(j)
+    alts_folder_vec <- list_alt_files_for_country(alt_dir, cc)
+    
+    all_alts <- sort(unique(c(alts_main_vec, alts_folder_vec)))
+    if (!length(all_alts)) return(NULL)
+    
+    dt <- data.table(
+      region_folder = region,
+      country_code  = suppressWarnings(as.integer(cc)),
+      country_label = country_label,
+      alt = all_alts,
+      in_main   = all_alts %in% alts_main_vec,
+      in_folder = all_alts %in% alts_folder_vec
+    )
+    
+    dt[, status := fifelse(in_main & in_folder, "both",
+                           fifelse(in_main & !in_folder, "only_in_main",
+                                   fifelse(!in_main & in_folder, "only_in_alt_folder", "neither")))]
+    dt
+  }), fill = TRUE)
+}), fill = TRUE)
 
 # -------------------------
-# Compare result alts vs dict main-json alts
+# jsonclean (console report)
 # -------------------------
-compare_result_to_dict_main <- function(res_result_long, dict_long, dict_wide) {
-  dict_main <- unique(dict_long[in_main == TRUE, .(region_folder, country_code, alt)])
-  dict_main[, in_dict_main := TRUE]
-  setkey(dict_main, region_folder, country_code, alt)
+jsonclean <- function(countrynumber, dict_dir) {
+  hit <- find_main_json(dict_dir, countrynumber)
+  cc <- as.character(countrynumber)
   
-  setkey(res_result_long, region_folder, country_code, alt)
-  cmp <- merge(res_result_long, dict_main, by = c("region_folder", "country_code", "alt"), all.x = TRUE)
-  
-  cmp[, status := fifelse(!is.na(in_dict_main), "present_in_dict_main_json", "only_in_result")]
-  cmp[, in_dict_main := NULL]
-  
-  # bring labels
-  labels <- unique(dict_wide[, .(region_folder, country_code, country_label)])
-  setkey(labels, region_folder, country_code)
-  setkey(cmp, region_folder, country_code)
-  labels[cmp]
-}
-
-# -------------------------
-# Single-country report (replacement for jsonclean)
-# -------------------------
-report_country <- function(country_code, dict_dir) {
-  cc <- as_cc(country_code)
-  region_dirs <- get_region_dirs(dict_dir)
-  
-  main_path <- NULL
-  region_hit <- NULL
-  
-  for (rdir in region_dirs) {
-    candidate <- file.path(rdir, paste0(cc, ".json"))
-    if (file.exists(candidate)) {
-      main_path <- candidate
-      region_hit <- basename(rdir)
-      break
-    }
-  }
-  if (is.null(main_path)) stop("Could not find main JSON for country ", cc)
+  main_path <- hit$main_path
+  region_hit <- hit$region_hit
   
   alt_dir <- file.path(dirname(main_path), "alt")
+  
   j <- safe_fromJSON(main_path)
   country_label <- if (!is.null(j) && !is.null(j$country_label)) j$country_label else NA_character_
   
   alts_main   <- sort(extract_alts_from_main(j))
   alts_folder <- sort(list_alt_files_for_country(alt_dir, cc))
   
-  list(
-    country_code    = suppressWarnings(as.integer(cc)),
-    country_label   = country_label,
-    region_folder   = region_hit,
-    main_json_path  = main_path,
-    alt_dir         = alt_dir,
-    alts_main       = alts_main,
-    alts_folder     = alts_folder,
-    only_in_main    = sort(setdiff(alts_main, alts_folder)),
-    only_in_folder  = sort(setdiff(alts_folder, alts_main))
-  )
-}
-
-print_country_report <- function(info) {
-  cc <- as_cc(info$country_code)
+  only_in_main   <- sort(setdiff(alts_main, alts_folder))
+  only_in_folder <- sort(setdiff(alts_folder, alts_main))
   
   cat("\n============================\n")
-  cat("Country:", ifelse(is.na(info$country_label), cc, paste0(info$country_label, " (", cc, ")")), "\n")
-  cat("Region folder:", info$region_folder, "\n")
-  cat("Main JSON:", info$main_json_path, "\n")
-  cat("Alt folder:", info$alt_dir, "\n")
+  cat("Country:", ifelse(is.na(country_label), cc, paste0(country_label, " (", cc, ")")), "\n")
+  cat("Region folder:", region_hit, "\n")
+  cat("Main JSON:", main_path, "\n")
+  cat("Alt folder:", alt_dir, "\n")
   cat("============================\n\n")
   
-  cat("Alts referenced in MAIN JSON (", length(info$alts_main), "):\n", sep = "")
-  if (!length(info$alts_main)) cat("  - none -\n") else cat("  - ", paste(info$alts_main, collapse = "\n  - "), "\n", sep = "")
+  cat("Alts referenced in MAIN JSON (", length(alts_main), "):\n", sep = "")
+  if (!length(alts_main)) cat("  - none -\n") else cat("  - ", paste(alts_main, collapse = "\n  - "), "\n", sep = "")
   cat("\n")
   
-  cat("Alt files present in ALT folder (", length(info$alts_folder), "):\n", sep = "")
-  if (!length(info$alts_folder)) cat("  - none -\n") else cat("  - ", paste(info$alts_folder, collapse = "\n  - "), "\n", sep = "")
+  cat("Alt files present in ALT folder (", length(alts_folder), "):\n", sep = "")
+  if (!length(alts_folder)) cat("  - none -\n") else cat("  - ", paste(alts_folder, collapse = "\n  - "), "\n", sep = "")
   cat("\n")
   
-  cat("ONLY in MAIN JSON (missing files) (", length(info$only_in_main), "):\n", sep = "")
-  if (!length(info$only_in_main)) cat("  - none -\n") else cat("  - ", paste(info$only_in_main, collapse = "\n  - "), "\n", sep = "")
+  cat("ONLY in MAIN JSON (missing files) (", length(only_in_main), "):\n", sep = "")
+  if (!length(only_in_main)) cat("  - none -\n") else cat("  - ", paste(only_in_main, collapse = "\n  - "), "\n", sep = "")
   cat("\n")
   
-  cat("ONLY in ALT folder (not referenced) (", length(info$only_in_folder), "):\n", sep = "")
-  if (!length(info$only_in_folder)) cat("  - none -\n") else cat("  - ", paste(info$only_in_folder, collapse = "\n  - "), "\n", sep = "")
+  cat("ONLY in ALT folder (not referenced) (", length(only_in_folder), "):\n", sep = "")
+  if (!length(only_in_folder)) cat("  - none -\n") else cat("  - ", paste(only_in_folder, collapse = "\n  - "), "\n", sep = "")
   cat("\n")
+  
+  invisible(list(
+    country_code = suppressWarnings(as.integer(cc)),
+    country_label = country_label,
+    region_folder = region_hit,
+    main_json_path = main_path,
+    alt_dir = alt_dir,
+    alts_main = alts_main,
+    alts_folder = alts_folder,
+    only_in_main = only_in_main,
+    only_in_folder = only_in_folder
+  ))
 }
 
 # -------------------------
-# Delete helpers (dry-run supported)
+# RESULTS: build table + compare to dict main JSON
 # -------------------------
-build_dict_delete_list <- function(dict_info) {
-  cc <- as_cc(dict_info$country_code)
-  if (!length(dict_info$only_in_folder)) return(data.table())
+
+res_result_long <- rbindlist(lapply(region_dirs, function(rdir_dict) {
+  region <- basename(rdir_dict)
   
-  data.table(
-    where = "dict",
-    region_folder = dict_info$region_folder,
-    country_code  = dict_info$country_code,
-    alt = dict_info$only_in_folder,
-    file_path = file.path(dict_info$alt_dir, paste0(cc, "_", dict_info$only_in_folder, ".json"))
-  )[, exists := file.exists(file_path)][]
+  main_jsons <- list.files(rdir_dict, pattern = "^\\d+\\.json$", full.names = TRUE)
+  
+  rdir_result <- file.path(result_dir, region)
+  if (!dir.exists(rdir_result)) return(NULL)
+  
+  rbindlist(lapply(main_jsons, function(f) {
+    cc <- str_remove(basename(f), "\\.json$")
+    
+    dt <- extract_result_alts_for_country(rdir_result, cc)
+    if (!nrow(dt)) return(NULL)
+    
+    data.table(
+      region_folder = region,
+      country_code  = suppressWarnings(as.integer(cc)),
+      alt = dt$alt,
+      type = dt$type
+    )
+  }), fill = TRUE)
+}), fill = TRUE)
+
+dict_main_alts <- unique(res_long[in_main == TRUE, .(region_folder, country_code, alt)])
+dict_main_alts[, in_dict_main := TRUE]
+setkey(dict_main_alts, region_folder, country_code, alt)
+
+setkey(res_result_long, region_folder, country_code, alt)
+
+res_result_compare <- merge(
+  res_result_long,
+  dict_main_alts,
+  by = c("region_folder", "country_code", "alt"),
+  all.x = TRUE
+)
+
+res_result_compare[, in_dict_main := !is.na(in_dict_main)]
+res_result_compare[, status := fifelse(in_dict_main, "present_in_dict_main_json", "only_in_result")]
+res_result_compare[, in_dict_main := NULL]
+
+# add country label
+country_labels <- unique(res[, .(region_folder, country_code, country_label)])
+setkey(country_labels, region_folder, country_code)
+setkey(res_result_compare, region_folder, country_code)
+res_result_compare <- country_labels[res_result_compare]
+
+# -------------------------
+# DELETIONS (DICT + RESULT)
+# -------------------------
+
+# DICT deletions: only those not referenced in main json
+to_delete_dict <- unique(res_long[status == "only_in_alt_folder", .(region_folder, country_code, alt)])
+
+cat("\n--- DICT deletions ---\n")
+if (nrow(to_delete_dict)) {
+  # IMPORTANT: use region_folder AS-IS ("06" stays "06")
+  to_delete_dict[, file_path := file.path(
+    dict_dir,
+    region_folder,
+    "alt",
+    paste0(country_code, "_", alt, ".json")
+  )]
+  
+  to_delete_dict[, exists := file.exists(file_path)]
+  del_dict_files <- to_delete_dict[exists == TRUE, file_path]
+  
+  cat("Candidates:", nrow(to_delete_dict), "\n")
+  cat("Existing files:", length(del_dict_files), "\n")
+  
+  if (length(del_dict_files)) {
+    if (dry_run) {
+      cat("DRY RUN (no deletion). Example paths:\n")
+      cat(paste(head(del_dict_files, 20), collapse = "\n"), "\n")
+    } else {
+      ok <- file.remove(del_dict_files)
+      cat("Deleted:", sum(ok), " / Failed:", sum(!ok), "\n")
+    }
+  }
+} else {
+  cat("No files to delete.\n")
 }
 
-build_result_delete_list <- function(country_code, region_folder, alts_to_delete, result_dir) {
-  cc <- as_cc(country_code)
-  rdir_result <- file.path(result_dir, region_folder)
-  if (!dir.exists(rdir_result) || !length(alts_to_delete)) return(data.table())
+# RESULT deletions: any csv/json whose BASE alt is not in dict main json
+to_delete_result <- unique(res_result_compare[status == "only_in_result", .(region_folder, country_code, alt)])
+
+cat("\n--- RESULT deletions ---\n")
+if (nrow(to_delete_result)) {
+  del_result_dt <- rbindlist(lapply(unique(to_delete_result$region_folder), function(region) {
+    region <- as.character(region)
+    
+    rdir_result <- file.path(result_dir, region)
+    if (!dir.exists(rdir_result)) return(NULL)
+    
+    alt_dir <- file.path(rdir_result, "alt")
+    scan_dir <- if (dir.exists(alt_dir)) alt_dir else rdir_result
+    
+    targets_region <- to_delete_result[as.character(region_folder) == region]
+    if (!nrow(targets_region)) return(NULL)
+    
+    rbindlist(lapply(unique(targets_region$country_code), function(cc_num) {
+      cc <- as.character(cc_num)
+      
+      files <- list.files(scan_dir, pattern = "\\.(json|csv)$", full.names = FALSE)
+      files <- files[startsWith(files, paste0(cc, "_"))]
+      if (!length(files)) return(NULL)
+      
+      parsed <- parse_result_file_alt(files, cc)
+      if (!nrow(parsed)) return(NULL)
+      
+      targets_cc <- targets_region[country_code == cc_num, alt]
+      parsed <- parsed[alt %in% targets_cc]
+      if (!nrow(parsed)) return(NULL)
+      
+      parsed[, `:=`(
+        region_folder = region,
+        country_code  = cc_num,
+        scan_dir      = scan_dir,
+        file_path     = file.path(scan_dir, file)
+      )]
+      parsed
+    }), fill = TRUE)
+  }), fill = TRUE)
   
-  alt_dir <- file.path(rdir_result, "alt")
-  scan_dir <- if (dir.exists(alt_dir)) alt_dir else rdir_result
-  if (!dir.exists(scan_dir)) return(data.table())
+  cat("Candidates (alts):", nrow(to_delete_result), "\n")
+  cat("Matching files found:", nrow(del_result_dt), "\n")
   
-  files <- list.files(scan_dir, pattern = "\\.json$", full.names = FALSE)
-  files <- files[startsWith(files, paste0(cc, "_"))]
-  if (!length(files)) return(data.table())
-  
-  parsed <- parse_result_files(files, cc)
-  parsed <- parsed[alt %in% alts_to_delete]
-  
-  if (!nrow(parsed)) return(data.table())
-  
-  parsed[, `:=`(
-    where = "result",
-    region_folder = as.character(region_folder),
-    country_code  = suppressWarnings(as.integer(cc)),
-    file_path     = file.path(scan_dir, file)
-  )][, exists := file.exists(file_path)][
-    , .(where, region_folder, country_code, alt, type, file_path, exists)
-  ]
+  if (nrow(del_result_dt)) {
+    del_result_dt[, exists := file.exists(file_path)]
+    del_files <- unique(del_result_dt[exists == TRUE, file_path])
+    
+    cat("Existing files:", length(del_files), "\n")
+    
+    if (length(del_files)) {
+      if (dry_run) {
+        cat("DRY RUN (no deletion). Example paths:\n")
+        cat(paste(head(del_files, 50), collapse = "\n"), "\n")
+      } else {
+        ok <- file.remove(del_files)
+        cat("Deleted:", sum(ok), " / Failed:", sum(!ok), "\n")
+      }
+    }
+  }
+} else {
+  cat("No files to delete.\n")
 }
 
-delete_files <- function(paths, dry_run = TRUE) {
-  paths <- unique(paths)
-  paths <- paths[file.exists(paths)]
-  if (!length(paths)) return(invisible(list(deleted = 0L, failed = 0L, paths = character(0))))
+cat("\nDONE. If you want to actually delete, set dry_run <- FALSE.\n")
+
+# -------------------------
+# altClean function
+# -------------------------
+altClean <- function(countrycode,
+                     delete = FALSE)
+{
   
-  if (isTRUE(dry_run)) {
-    cat("DRY RUN (no deletion). Files:\n")
-    cat(paste(paths, collapse = "\n"), "\n")
-    return(invisible(list(deleted = 0L, failed = 0L, paths = paths)))
+  info <- jsonclean(countrycode, dict_dir)  # prints jsonclean block
+  
+  cc <- as.character(countrycode)
+  region_hit <- as.character(info$region_folder)
+  main_path <- info$main_json_path
+  alts_main <- info$alts_main
+  
+  # dict candidates
+  dict_candidates <- data.table()
+  if (length(info$only_in_folder)) {
+    dict_candidates <- data.table(
+      where = "dict",
+      region_folder = region_hit,
+      country_code = suppressWarnings(as.integer(cc)),
+      alt = info$only_in_folder,
+      file_path = file.path(info$alt_dir, paste0(cc, "_", info$only_in_folder, ".json"))
+    )
+    dict_candidates[, exists := file.exists(file_path)]
   }
   
-  ok <- file.remove(paths)
-  invisible(list(deleted = sum(ok), failed = sum(!ok), paths = paths))
-}
-
-# -------------------------
-# MAIN: Run full pipeline (dict + result + exports)
-# -------------------------
-run_alt_mapping <- function(dict_dir, result_dir, export_csv = TRUE) {
-  dict <- scan_dict(dict_dir)
-  res_wide <- dict$wide
-  res_long <- dict$long
-  
-  res_result_long <- scan_result(result_dir, dict$region_dirs)
-  res_result_compare <- compare_result_to_dict_main(res_result_long, res_long, res_wide)
-  
-  if (isTRUE(export_csv)) {
-    fwrite(res_wide, file.path(dict_dir, "alt_mapping_comparison.csv"))
-    fwrite(res_long, file.path(dict_dir, "alt_mapping_long.csv"))
-    fwrite(res_result_compare, file.path(dict_dir, "alt_mapping_result_compare.csv"))
-  }
-  
-  list(
-    dict_wide = res_wide,
-    dict_long = res_long,
-    result_long = res_result_long,
-    result_compare = res_result_compare
-  )
-}
-
-# -------------------------
-# High-level cleaner: one country, list/delete candidates
-# -------------------------
-altClean <- function(country_code,
-                     dict_dir,
-                     result_dir,
-                     delete = FALSE) {
-  
-  info <- report_country(country_code, dict_dir)
-  print_country_report(info)
-  
-  dict_candidates <- build_dict_delete_list(info)
-  
-  # Result delete candidates: alts present in result but NOT in dict main-json
-  # (i.e., "only_in_result" alts)
-  # For one country, infer by scanning result and filtering against info$alts_main
-  region_folder <- info$region_folder
-  rdir_result <- file.path(result_dir, region_folder)
-  
+  # result candidates
   result_candidates <- data.table()
+  rdir_result <- file.path(result_dir, region_hit)
   if (dir.exists(rdir_result)) {
-    dt_res <- extract_result_alts_for_country(rdir_result, country_code)
-    if (nrow(dt_res)) {
-      only_in_result_alts <- setdiff(unique(dt_res$alt), info$alts_main)
-      result_candidates <- build_result_delete_list(country_code, region_folder, only_in_result_alts, result_dir)
+    alt_dir_result <- file.path(rdir_result, "alt")
+    scan_dir <- if (dir.exists(alt_dir_result)) alt_dir_result else rdir_result
+    
+    files <- list.files(scan_dir, pattern = "\\.(json|csv)$", full.names = FALSE)
+    files <- files[startsWith(files, paste0(cc, "_"))]
+    
+    parsed <- parse_result_file_alt(files, cc)
+    if (nrow(parsed)) {
+      parsed <- parsed[!(alt %in% alts_main)]
+      if (nrow(parsed)) {
+        parsed[, `:=`(
+          where = "result",
+          region_folder = region_hit,
+          country_code = suppressWarnings(as.integer(cc)),
+          file_path = file.path(scan_dir, file),
+          exists = file.exists(file.path(scan_dir, file))
+        )]
+        result_candidates <- parsed[, .(where, region_folder, country_code, alt, file_path, exists)]
+      }
     }
   }
   
-  all_candidates <- rbindlist(list(
-    dict_candidates[, .(where, region_folder, country_code, alt, type = NA_character_, file_path, exists)],
-    result_candidates
-  ), fill = TRUE)
+  all_candidates <- rbindlist(
+    list(
+      dict_candidates[, .(where, region_folder, country_code, alt, file_path, exists)],
+      result_candidates
+    ),
+    fill = TRUE
+  )
   
   cat("\n============================\n")
-  cat("altClean summary\n")
+  cat("altClean\n")
+  cat("Country:", ifelse(is.na(info$country_label), cc, paste0(info$country_label, " (", cc, ")")), "\n")
+  cat("Region folder:", region_hit, "\n")
+  cat("Main JSON:", main_path, "\n")
   cat("Delete mode:", ifelse(isTRUE(delete), "YES (will delete)", "NO (dry run - list only)"), "\n")
-  cat("DICT candidates:", nrow(dict_candidates), " | existing:", sum(dict_candidates$exists %in% TRUE), "\n")
-  cat("RESULT candidates:", nrow(result_candidates), " | existing:", sum(result_candidates$exists %in% TRUE), "\n")
-  cat("TOTAL candidates:", nrow(all_candidates), " | existing:", sum(all_candidates$exists %in% TRUE), "\n")
   cat("============================\n\n")
   
-  existing_paths <- all_candidates[exists == TRUE, file_path]
-  delete_files(existing_paths, dry_run = !isTRUE(delete))
+  cat("DICT candidates:", nrow(dict_candidates), " | existing:", sum(dict_candidates$exists %in% TRUE), "\n")
+  cat("RESULT candidates:", nrow(result_candidates), " | existing:", sum(result_candidates$exists %in% TRUE), "\n")
+  cat("TOTAL candidates:", nrow(all_candidates), " | existing:", sum(all_candidates$exists %in% TRUE), "\n\n")
+  
+  existing_files <- unique(all_candidates[exists == TRUE, file_path])
+  
+  if (!length(existing_files)) {
+    cat("Nothing to delete.\n")
+  } else if (!isTRUE(delete)) {
+    cat("FILES THAT WOULD BE DELETED:\n")
+    cat(paste(existing_files, collapse = "\n"), "\n")
+  } else {
+    ok <- file.remove(existing_files)
+    cat("Deleted:", sum(ok), " / Failed:", sum(!ok), "\n")
+    if (any(!ok)) {
+      cat("Failed paths:\n")
+      cat(paste(existing_files[!ok], collapse = "\n"), "\n")
+    }
+  }
   
   invisible(list(
-    info = info,
+    country_code = suppressWarnings(as.integer(cc)),
+    country_label = info$country_label,
+    region_folder = region_hit,
+    main_json_path = main_path,
+    alts_main = alts_main,
+    jsonclean = info,
     dict_to_delete = dict_candidates,
     result_to_delete = result_candidates,
     to_delete = all_candidates
   ))
 }
-
-# ============================================================
-# USAGE
-# ============================================================
-
-# # 1) Run full mapping and export CSVs
-# out <- run_alt_mapping(cfg$dict_dir, cfg$result_dir, export_csv = TRUE)
-# View(out$dict_wide)
-# View(out$dict_long)
-# View(out$result_compare)
-# 
-# # 2) Single-country report + dry-run delete listing
-# altClean(630, dict_dir = cfg$dict_dir, result_dir = cfg$result_dir, delete = FALSE)
-# 
-# # 3) Actually delete (be careful)
-# altClean(630, dict_dir = cfg$dict_dir, result_dir = cfg$result_dir, delete = TRUE)
 
