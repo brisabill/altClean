@@ -637,6 +637,3 @@ altClean <- function(countrycode,
   ))
 }
 
-# Examples:
-altClean(300, delete = FALSE)  # prints jsonclean block + altClean block, lists files
-altClean(300, delete = TRUE)   # prints blocks, then deletes
