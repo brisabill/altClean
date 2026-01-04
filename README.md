@@ -1,4 +1,4 @@
-# Map and Clean JSON Alt Files
+# Mapping alt JSON
 
 This repository provides R utilities to **map**, **compare**, and **clean** `alt` JSON files by checking consistency between:
 
