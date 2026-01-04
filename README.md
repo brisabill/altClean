@@ -16,4 +16,7 @@ Source the script in R:
 
 ```r
 source("altClean.R")
+altClean(300, delete = FALSE)
+altClean(300, delete = TRUE)
+
 
