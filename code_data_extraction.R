@@ -222,22 +222,6 @@ extract_alt_source <- function(path) {
 }
 
 `%||%` <- function(a, b) if (!is.null(a)) a else b
-
-#assembling sources by code chunk datafra
-df_sources_by_chunk <- df_models_results %>%
-  filter(index == "incidence", !is.na(alt), !is.na(id_label)) %>%
-  mutate(
-    chunk = if_else(is.na(chunk) | chunk == "", ".root", chunk),
-    # nice display order (optional)
-    chunk = factor(chunk, levels = c("MI_country", "MI_area", "MI_continent", ".root"))
-  ) %>%
-  group_by(country_code, alt, chunk) %>%
-  summarise(
-    col1 = str_c(unique(id_label), collapse = ", "),
-    .groups = "drop"
-  ) %>%
-  arrange(country_code, alt, chunk)
-
 #Assembling results dataframe
 df_models_results <- bind_rows(
   map_dfr(main_files, extract_main_source),
@@ -245,6 +229,22 @@ df_models_results <- bind_rows(
 )%>%
   left_join(dict_country, by = c("country_code" = "country_code"))%>%
   distinct()
+#assembling sources by code chunk datafra
+df_sources_by_chunk <- df_models_results %>%
+  filter(!is.na(id_label)) %>%
+  mutate(
+    alt_display = if_else(is.na(alt) | alt == "", "MAIN", alt),
+    chunk = if_else(is.na(chunk) | chunk == "" | chunk == ".root", "MAIN", chunk),
+    chunk = factor(chunk, levels = c("MI_country", "MI_area", "MI_continent", "MAIN"))
+  ) %>%
+  group_by(country_code, index, alt_display, chunk) %>%
+  summarise(
+    col1 = str_c(unique(id_label), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(country_code, index, alt_display, chunk)
+
+
 
 
 #Creation of text dataframe for except; listing sex only when gender = 0 (not listing sex for gender specific cancer) and listing cancer order according to numerical value in icd3.
@@ -454,4 +454,5 @@ countryReport <- function(cc,
   
   invisible(pdf_path)
 }
+
 
