@@ -1,6 +1,6 @@
 # Mapping of alts and deletion of unused files
 
-This repository provides R utilities to **map**, **compare**, and **clean** `alt` JSON files.
+This repository maps used alts and delets unused alt both in dict and results folder and .json and .csv files.
 ---
 ```r
 source("altCode.R")
