@@ -350,6 +350,8 @@ country_list <- df_models_dict %>%
 out_dir <- "pdf_reports"
 dir.create(out_dir, showWarnings = FALSE)
 
+
+#Exports pdf reports for all countries
 for (cc in country_list) {
   e <- new.env(parent = globalenv())   # IMPORTANT: fresh env each time
   rmarkdown::render(
@@ -380,6 +382,33 @@ pdfReport <- function(cc,
   )
 }
 
+# Usage:
+pdfReport(76)
 
+#Function to print same info asd ithe pdf but directly in the R console
+countryReport <- function(cc, rmd = "country_report.Rmd") {
+  cc <- as.integer(cc)
+  if (is.na(cc)) stop("cc must be numeric")
+  
+  tmp <- tempfile(fileext = ".md")
+  
+  e <- new.env(parent = globalenv())
+  
+  rmarkdown::render(
+    input = rmd,
+    output_format = "md_document",
+    output_file = tmp,
+    params = list(cc = cc),
+    envir = e,
+    quiet = TRUE
+  )
+  
+  cat(paste(readLines(tmp, warn = FALSE), collapse = "\n"))
+  invisible(NULL)
+}
+
+
+#Usage:
+#countryReport(76)
 
 
