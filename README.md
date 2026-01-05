@@ -30,4 +30,10 @@ consoleReport (76)
 countryReport (76, print = FALSE)
 ---
 ```
-
+# Plot pf population pyramid
+---
+```r
+#Usage
+plot_population_pyramid(250)
+---
+```
