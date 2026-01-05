@@ -24,7 +24,10 @@ source("code_data_estraction.R")
 pdfReport(76)
 
 #Usage:
-countryReport (76)
+consoleReport (76)
+
+#Usage:
+countryReport (76, print = FALSE)
 ---
 ```
 
