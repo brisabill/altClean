@@ -84,7 +84,8 @@ extract_one_dict_file <- function(path) {
 df_models_dict <- map_dfr(dict_files, extract_one_dict_file) %>%
   left_join(dict_country, by = c("country_code" = "country_code")) %>%
   left_join(dict_cancer,  by = c("cancer_code"  = "cancer_code")) %>%
-  left_join(dict_icd_map %>% distinct(icd_label, icd3), by = "icd_label") %>%
+  left_join(dict_icd_map %>% distinct(icd_label, icd3), by = "icd_label",
+            relationship = "many-to-many") %>%
   mutate(
     alt = if_else(model != "template" & is.na(alt), model, alt)
   ) %>%
@@ -441,3 +442,4 @@ countryReport <- function(cc = NULL,
 
   invisible(p)
 }
+
