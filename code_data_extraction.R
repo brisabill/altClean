@@ -4,112 +4,129 @@ library(purrr)
 library(stringr)
 library(tibble)
 library(fs)
-library (rmarkdown)
-library (knitr)
-library (purrr)
-library (tinytex)
+library(rmarkdown)
+library(knitr)
+library(tinytex)
 
-setwd("C:/Users/mirandaa/Desktop/estican/estican/dict")
-OUT_DIR <- "C:/Users/mirandaa/Desktop/estican/estican/other/Reports"
+# ----Setting directories ---------
+ESTICAN_ROOT <- "C:/Users/mirandaa/Desktop/estican"  
 
-#Load dictionaries
-dict_cancer <- read.delim("dictionaries/dict_cancer.csv", sep = ",", stringsAsFactors = TRUE) %>%
-  select (-X)
+DICT_DIR   <- fs::path(ESTICAN_ROOT, "dict")
+RESULT_DIR <- fs::path(ESTICAN_ROOT, "result")
 
-dict_country <- read.delim("dictionaries/dict_country.csv", sep = ",", stringsAsFactors = FALSE)%>%
-  select (-X)
+WORK_DIR <- fs::path(ESTICAN_ROOT, "other", "json_extraction")
+OUT_DIR  <- fs::path(ESTICAN_ROOT, "other", "reports")
 
-dict_icd_map <- read.delim("dictionaries/dict_icd_map.csv", sep = ",", stringsAsFactors = FALSE)
+RMD_FILE <- fs::path(WORK_DIR, "country_report.Rmd")
 
-# -------- helpers --------
+DICT_CANCER  <- fs::path(WORK_DIR, "dict_cancer.csv")
+DICT_COUNTRY <- fs::path(WORK_DIR, "dict_country.csv")
+DICT_ICD_MAP <- fs::path(WORK_DIR, "dict_icd_map.csv")
+
+# ---Loading the dictionaries
+dict_cancer <- read.delim(DICT_CANCER, sep = ",", stringsAsFactors = TRUE) %>%
+  select(-any_of("X"))
+
+dict_country <- read.delim(DICT_COUNTRY, sep = ",", stringsAsFactors = FALSE) %>%
+  select(-any_of("X"))
+
+dict_icd_map <- read.delim(DICT_ICD_MAP, sep = ",", stringsAsFactors = FALSE)
+
+# ---- HELPERS --------------------------------------------------------------
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
 idx_from_letter <- function(letter) ifelse(letter == "i", "incidence", "mortality")
 
 as_num <- function(x) suppressWarnings(as.numeric(x))
 
 safe_fromJSON <- function(path) {
-  tryCatch(fromJSON(path, simplifyVector = TRUE), error = function(e) NULL)
+  tryCatch(jsonlite::fromJSON(path, simplifyVector = TRUE), error = function(e) NULL)
 }
-root_dict <- "C:/Users/brisa/Documents/code_data_extraction/dict"
 
-root_results <- "C:/Users/brisa/Documents/code_data_extraction/result"
+col_or_na <- function(df, nm, default = NA) {
+  if (nm %in% names(df)) df[[nm]] else rep(default, nrow(df))
+}
 
-####Extraction from dict folder
-# ONLY JSONs directly under each region folder: dict/09/840.json
-files <- dir_ls(root_dict, recurse = TRUE, type = "file", glob = "*.json") |>
-  keep(~ str_detect(.x, "/\\d{2}/\\d+\\.json$"))
+# ============================================================
+# 1) DICT EXTRACTION 
+# ============================================================
 
-extract_one_file <- function(path) {
-  
-  region <- as.integer(basename(path_dir(path)))
-  country <- as.integer(str_remove(path_file(path), "\\.json$"))
-  
-  x <- tryCatch(
-    fromJSON(path, simplifyVector = TRUE),
-    error = function(e) return(NULL)
-  )
+dict_files <- fs::dir_ls(DICT_DIR, recurse = TRUE, type = "file", glob = "*.json") |>
+  keep(~ str_detect(.x, "[/\\\\]\\d{2}[/\\\\]\\d+\\.json$"))
+
+extract_one_dict_file <- function(path) {
+  region  <- suppressWarnings(as.integer(fs::path_file(fs::path_dir(path))))
+  country <- suppressWarnings(as.integer(str_remove(fs::path_file(path), "\\.json$")))
+
+  x <- safe_fromJSON(path)
   if (is.null(x) || is.null(x$model_cancer)) return(tibble())
-  
+
   get_chunk <- function(chunk_name) {
     chunk <- x$model_cancer[[chunk_name]]
     if (is.null(chunk) || length(chunk) == 0) return(tibble())
-    
+
     as_tibble(chunk) %>%
       transmute(
-        model   = .data$model,
+        model        = .data$model,
         cancer_code  = .data$cancer_code,
-        sex     = .data$sex,
-        alt     = if ("alt"   %in% names(.)) .data$alt   else NA_character_,
-        coeff   = if ("coeff" %in% names(.)) .data$coeff else NA_real_,
-        index   = chunk_name,
+        sex          = .data$sex,
+        alt          = if ("alt"   %in% names(.)) .data$alt   else NA_character_,
+        coeff        = if ("coeff" %in% names(.)) .data$coeff else NA_real_,
+        index        = chunk_name,
         country_code = country,
-        region  = region
+        region       = region
       )
   }
-  
+
   bind_rows(get_chunk("incidence"), get_chunk("mortality"))
 }
 
-####Assembling dict dataframe with extracted information
-
-df_models_dict <- map_dfr(files, extract_one_file) %>%
-  left_join(dict_country, by = c("country_code" = "country_code"))%>%
-  left_join(dict_cancer, by = c("cancer_code" = "cancer_code"))%>%
-  left_join(dict_icd_map %>% #Adds icd3 label to that ICD codes can be numerically ordered
-              distinct(icd_label, icd3), by = "icd_label") %>%
+df_models_dict <- map_dfr(dict_files, extract_one_dict_file) %>%
+  left_join(dict_country, by = c("country_code" = "country_code")) %>%
+  left_join(dict_cancer,  by = c("cancer_code"  = "cancer_code")) %>%
+  left_join(dict_icd_map %>% distinct(icd_label, icd3), by = "icd_label") %>%
   mutate(
-    alt = if_else(model != "template" & is.na(alt),
-                  model,
-                  alt)
-  )
+    alt = if_else(model != "template" & is.na(alt), model, alt)
+  ) %>%
+  distinct()
 
+# Countries available from dict
+country_list <- df_models_dict %>%
+  distinct(country_code) %>%
+  arrange(country_code) %>%
+  pull(country_code)
 
-####Extraction from results folder
+# ============================================================
+# 2) RESULTS EXTRACTION 
+# ============================================================
 
-all_files <- dir_ls(root_results, recurse = TRUE, type = "file", glob = "*.json")
+all_result_files <- fs::dir_ls(RESULT_DIR, recurse = TRUE, type = "file", glob = "*.json")
 
-main_files <- all_files %>%
+main_files <- all_result_files %>%
   keep(~ str_detect(.x, "[/\\\\]\\d{2}[/\\\\]\\d+[im]_source\\.json$"))
 
-alt_files <- all_files %>%
+alt_files <- all_result_files %>%
   keep(~ str_detect(.x, "[/\\\\]\\d{2}[/\\\\]alt[/\\\\]\\d+_alt_.+_[im]_source\\.json$"))
 
 extract_main_source <- function(path) {
-  region <- as.integer(basename(path_dir(path)))
-  
-  m <- str_match(path_file(path), "^(\\d+)([im])_source\\.?(json)?$")
+  region <- suppressWarnings(as.integer(fs::path_file(fs::path_dir(path))))
+
+  m <- str_match(fs::path_file(path), "^(\\d+)([im])_source\\.json$")
   if (any(is.na(m))) return(tibble())
-  
+
   country_code <- as.integer(m[2])
-  index   <- idx_from_letter(m[3])
-  
+  index <- idx_from_letter(m[3])
+
   x <- safe_fromJSON(path)
   if (is.null(x)) {
-    return(tibble(region, country_code, index, alt = NA_character_,
-                  method = NA_integer_, pop_coverage = NA_real_, WHO_completeness = NA_real_,
-                  id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_,
-                  file = path))
+    return(tibble(
+      region = region, country_code = country_code, index = index, alt = NA_character_,
+      method = NA_integer_, pop_coverage = NA_real_, WHO_completeness = NA_real_,
+      id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_,
+      chunk = NA_character_, file = path
+    ))
   }
-  
+
   base <- tibble(
     region = region,
     country_code = country_code,
@@ -120,48 +137,62 @@ extract_main_source <- function(path) {
     WHO_completeness = as_num(x$WHO_completeness %||% NA_real_),
     file = path
   )
-  
+
   ds <- x$data_source
   if (is.null(ds) || length(ds) == 0) {
-    # keep one row for the file
     return(base %>% mutate(
-      id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_
+      id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_,
+      chunk = NA_character_
     ))
   }
-  
+
   as_tibble(ds) %>%
     transmute(
-      id_code  = if ("id_code" %in% names(.)) .data$id_code else NA_real_,
-      id_label = if ("id_label" %in% names(.)) .data$id_label else NA_character_,
-      source   = if ("source" %in% names(.)) .data$source else NA_character_,
-      period   = if ("period" %in% names(.)) .data$period else NA_character_
+      id_code  = suppressWarnings(as.numeric(coalesce(
+        if ("id_code" %in% names(.)) .data$id_code else NA_real_,
+        if ("id"      %in% names(.)) .data$id      else NA_real_,
+        if ("code"    %in% names(.)) .data$code    else NA_real_
+      ))),
+      id_label = as.character(coalesce(
+        if ("id_label" %in% names(.)) .data$id_label else NA_character_,
+        if ("label"    %in% names(.)) .data$label    else NA_character_,
+        if ("registry" %in% names(.)) .data$registry else NA_character_,
+        if ("name"     %in% names(.)) .data$name     else NA_character_
+      )),
+      source = as.character(coalesce(
+        if ("source" %in% names(.)) .data$source else NA_character_,
+        if ("src"    %in% names(.)) .data$src    else NA_character_
+      )),
+      period = as.character(coalesce(
+        if ("period"     %in% names(.)) .data$period     else NA_character_,
+        if ("years"      %in% names(.)) .data$years      else NA_character_,
+        if ("year_range" %in% names(.)) .data$year_range else NA_character_
+      )),
+      chunk = "MAIN"
     ) %>%
     bind_cols(., base[rep(1, nrow(.)), ])
 }
 
-col_or_na <- function(df, nm, default = NA) {
-  if (nm %in% names(df)) df[[nm]] else rep(default, nrow(df))
-}
-
 extract_alt_source <- function(path) {
-  region <- as.integer(basename(path_dir(path_dir(path))))
-  m <- str_match(path_file(path), "^(\\d+)_alt_(.+)_([im])_source\\.json$")
+  region <- suppressWarnings(as.integer(fs::path_file(fs::path_dir(fs::path_dir(path)))))
+
+  m <- str_match(fs::path_file(path), "^(\\d+)_alt_(.+)_([im])_source\\.json$")
   if (any(is.na(m))) return(tibble())
-  
+
   country_code <- as.integer(m[2])
   altname <- m[3]
   index <- idx_from_letter(m[4])
-  
+
   x <- safe_fromJSON(path)
   if (is.null(x)) {
     return(tibble(
       region = region, country_code = country_code, index = index, alt = altname,
       method = NA_integer_, pop_coverage = NA_real_, WHO_completeness = NA_real_,
       id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_,
-      file = path
+      chunk = NA_character_, file = path
     ))
   }
-  
+
   base <- tibble(
     region = region,
     country_code = country_code,
@@ -172,8 +203,8 @@ extract_alt_source <- function(path) {
     WHO_completeness = as_num(x$WHO_completeness %||% NA_real_),
     file = path
   )
-  
-  # ---- collect data_source from ANY level + keep chunk name ----
+
+  # collect data_source at root or inside named chunks; keep chunk name
   ds_list <- list()
   if (!is.null(x$data_source)) {
     ds_list[[".root"]] <- x$data_source
@@ -183,57 +214,54 @@ extract_alt_source <- function(path) {
       if (is.list(obj) && !is.null(obj$data_source)) ds_list[[nm]] <- obj$data_source
     }
   }
-  
+
   if (length(ds_list) == 0) {
     return(base %>% mutate(
       id_code = NA_real_, id_label = NA_character_, source = NA_character_, period = NA_character_,
       chunk = NA_character_
     ))
   }
-  
-  ds_tbl <- purrr::imap_dfr(ds_list, ~ tibble::as_tibble(.x) %>% mutate(chunk = .y))
-  ds <- ds_tbl
-  
-  # pick inc_source vs mort_source depending on index
- src_col <- if (index == "incidence") "inc_source" else "mort_source"
-  
+
+  ds <- purrr::imap_dfr(ds_list, ~ tibble::as_tibble(.x) %>% mutate(chunk = .y))
+
+  src_col <- if (index == "incidence") "inc_source" else "mort_source"
+
   as_tibble(ds) %>%
     transmute(
-      id_code  = suppressWarnings(as.numeric(dplyr::coalesce(
+      id_code  = suppressWarnings(as.numeric(coalesce(
         if ("id_code" %in% names(.)) .data$id_code else NA_real_,
         if ("id"      %in% names(.)) .data$id      else NA_real_,
         if ("code"    %in% names(.)) .data$code    else NA_real_
       ))),
-      id_label = as.character(dplyr::coalesce(
+      id_label = as.character(coalesce(
         if ("id_label" %in% names(.)) .data$id_label else NA_character_,
         if ("label"    %in% names(.)) .data$label    else NA_character_,
         if ("registry" %in% names(.)) .data$registry else NA_character_,
         if ("name"     %in% names(.)) .data$name     else NA_character_
       )),
-      source = as.character(dplyr::coalesce(
+      source = as.character(coalesce(
         if (src_col   %in% names(.)) .data[[src_col]] else NA_character_,
         if ("source"  %in% names(.)) .data$source     else NA_character_,
         if ("src"     %in% names(.)) .data$src        else NA_character_
       )),
-      period = as.character(dplyr::coalesce(
+      period = as.character(coalesce(
         if ("period"     %in% names(.)) .data$period     else NA_character_,
         if ("years"      %in% names(.)) .data$years      else NA_character_,
         if ("year_range" %in% names(.)) .data$year_range else NA_character_
-      ))
+      )),
+      chunk = .data$chunk
     ) %>%
     bind_cols(., base[rep(1, nrow(.)), ])
-  
 }
 
-`%||%` <- function(a, b) if (!is.null(a)) a else b
-#Assembling results dataframe
 df_models_results <- bind_rows(
   map_dfr(main_files, extract_main_source),
   map_dfr(alt_files,  extract_alt_source)
-)%>%
-  left_join(dict_country, by = c("country_code" = "country_code"))%>%
+) %>%
+  left_join(dict_country, by = c("country_code" = "country_code")) %>%
   distinct()
-#assembling sources by code chunk datafra
+
+# Sources table (your Rmd likely uses this)
 df_sources_by_chunk <- df_models_results %>%
   filter(!is.na(id_label)) %>%
   mutate(
@@ -242,16 +270,12 @@ df_sources_by_chunk <- df_models_results %>%
     chunk = factor(chunk, levels = c("MI_country", "MI_area", "MI_continent", "MAIN"))
   ) %>%
   group_by(country_code, index, alt_display, chunk) %>%
-  summarise(
-    col1 = str_c(unique(id_label), collapse = ", "),
-    .groups = "drop"
-  ) %>%
+  summarise(col1 = str_c(unique(id_label), collapse = ", "), .groups = "drop") %>%
   arrange(country_code, index, alt_display, chunk)
 
-
-
-
-#Creation of text dataframe for except; listing sex only when gender = 0 (not listing sex for gender specific cancer) and listing cancer order according to numerical value in icd3.
+# ============================================================
+# 3) CREATION OF TEXTS
+# ============================================================
 
 df_alt_text <- df_models_dict %>%
   filter(!is.na(alt)) %>%
@@ -278,7 +302,6 @@ df_alt_text <- df_models_dict %>%
   left_join(df_models_dict %>% distinct(country_label, country_code), by = "country_label") %>%
   distinct()
 
-#creation of text dataframe for coeff; listing sex only when gender = 0 (not listing sex for gender specific cancer) and listing cancer order according to numerical value in icd3.
 df_coeff_text <- df_models_dict %>%
   filter(!is.na(coeff), abs(coeff - 1) > 1e-9) %>%
   mutate(
@@ -305,10 +328,9 @@ df_coeff_text <- df_models_dict %>%
     col1 = str_c("Coeff was applied to ", str_c(cancer_txt, collapse = ", ")),
     .groups = "drop"
   ) %>%
-  left_join(df_models_dict %>% distinct(country_label, country_code), by = "country_label")%>%
+  left_join(df_models_dict %>% distinct(country_label, country_code), by = "country_label") %>%
   distinct()
 
-#Creation of dataframe to list model
 df_model_text <- df_models_dict %>%
   filter(!is.na(model)) %>%
   mutate(
@@ -330,135 +352,92 @@ df_model_text <- df_models_dict %>%
   summarise(icd3_min = suppressWarnings(min(icd3, na.rm = TRUE)), .groups = "drop") %>%
   arrange(country_label, model, index, icd3_min, cancer_txt) %>%
   group_by(country_label, model, index) %>%
-  summarise(col1 = str_c(cancer_txt, collapse = ", "), .groups = "drop")%>%
-  left_join(df_models_dict %>% distinct(country_label, country_code), by = "country_label")%>%
+  summarise(col1 = str_c(cancer_txt, collapse = ", "), .groups = "drop") %>%
+  left_join(df_models_dict %>% distinct(country_label, country_code), by = "country_label") %>%
   distinct()
 
-
-#exporting to .csv
-#write.csv(df_alt_text, "alt_text.csv", row.names = FALSE)
-
-#write.csv(df_coeff_text, "coeff_text.csv", row.names = FALSE)
-
-#write.csv(df_model_text, "model_text.csv", row.names = FALSE)
-
-#write.csv(df_models_results, "df_models_results.csv")
-
-#write.csv(df_models_dict, "df_models_dict.csv")
-
-####PDF exports
-country_list <- df_models_dict %>%
-  distinct(country_code) %>%
-  arrange(country_code) %>%
-  pull(country_code)
-
-out_dir <- "pdf_reports"
-dir.create(out_dir, showWarnings = FALSE)
-
-
-#Exports pdf reports for all countries
-#for (cc in country_list) {
-#  e <- new.env(parent = globalenv())   # IMPORTANT: fresh env each time
-#  rmarkdown::render(
-#    input = "country_report.Rmd",
-#    output_file = file.path(out_dir, paste0("country_", cc, ".pdf")),
-#    params = list(cc = cc),
-#    envir = e
-#  )
-#}
-
-# ---- PDF helper: render ONE country on demand ----
+# ============================================================
+# 4) Creation of functions
+# ============================================================
+# 1. pdfReport
 pdfReport <- function(cc,
                       out_dir = OUT_DIR,
-                      input_rmd = "country_report.Rmd") {
+                      input_rmd = RMD_FILE) {
   cc <- as.integer(cc)
-  if (is.na(cc)) stop("cc must be a numeric country_code (e.g., 300).")
-  
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-  
-  # fresh env so each render is isolated (same behavior as your loop)
+  if (is.na(cc)) stop("cc must be numeric (e.g., 76).")
+
+  fs::dir_create(out_dir, recurse = TRUE)
+  pdf_path <- fs::path(out_dir, paste0("country_", cc, ".pdf"))
+
+  # fresh env each render
   e <- new.env(parent = globalenv())
-  
+
   rmarkdown::render(
     input = input_rmd,
-    output_file = file.path(out_dir, paste0("country_", cc, ".pdf")),
+    output_file = pdf_path,
     params = list(cc = cc),
-    envir = e
+    envir = e,
+    quiet = TRUE,
+    knit_root_dir = WORK_DIR
   )
+
+  invisible(pdf_path)
 }
 
-# Usage:
-#pdfReport(76)
-
-#Function to print same info asd ithe pdf but directly in the R console
-consoleReport <- function(cc, rmd = "country_report.Rmd") {
+#2. consoleReport
+consoleReport <- function(cc, rmd = RMD_FILE) {
   cc <- as.integer(cc)
-  if (is.na(cc)) stop("cc must be numeric")
-  
+  if (is.na(cc)) stop("cc must be numeric (e.g., 76).")
+
   tmp <- tempfile(fileext = ".md")
-  
   e <- new.env(parent = globalenv())
-  
+
   rmarkdown::render(
     input = rmd,
     output_format = "md_document",
     output_file = tmp,
     params = list(cc = cc),
     envir = e,
-    quiet = TRUE
+    quiet = TRUE,
+    knit_root_dir = WORK_DIR
   )
-  
+
   cat(paste(readLines(tmp, warn = FALSE), collapse = "\n"))
   invisible(NULL)
 }
 
+# 3. countryReport (main function)
+# cc = single country code OR "all"
+# all = TRUE -> render PDFs for all countries in dict
+countryReport <- function(cc = NULL,
+                          all = FALSE,
+                          print = FALSE,
+                          out_dir = OUT_DIR,
+                          rmd = RMD_FILE) {
 
-#Usage:
-#consoleReport(76)
-
-#wraping function to create together both pdf and optional pdf report
-
-countryReport <- function(cc,
-                   print = TRUE,
-                   out_dir = OUT_DIR,
-                   rmd = "country_report.Rmd") {
-  cc <- as.integer(cc)
-  if (is.na(cc)) stop("cc must be numeric (e.g., 300).")
-  
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-  pdf_path <- file.path(out_dir, paste0("country_", cc, ".pdf"))
-  
-  # fresh env (same behavior as your loop)
-  e <- new.env(parent = globalenv())
-  
-  # 1) Always render PDF
-  rmarkdown::render(
-    input = rmd,
-    output_file = pdf_path,
-    params = list(cc = cc),
-    envir = e,
-    quiet = TRUE
-  )
-  
-  # 2) Optional: print same report to console
-  if (isTRUE(print)) {
-    tmp_md <- tempfile(fileext = ".md")
-    
-    rmarkdown::render(
-      input = rmd,
-      output_format = "md_document",
-      output_file = tmp_md,
-      params = list(cc = cc),
-      envir = e,
-      quiet = TRUE
-    )
-    
-    cat(paste(readLines(tmp_md, warn = FALSE), collapse = "\n"))
+  if (is.character(cc) && length(cc) == 1 && tolower(cc) == "all") {
+    all <- TRUE
   }
-  
-  invisible(pdf_path)
+
+  if (isTRUE(all)) {
+    if (length(country_list) == 0) stop("No countries found in dict JSONs.")
+    paths <- character(0)
+
+    for (k in country_list) {
+      p <- pdfReport(k, out_dir = out_dir, input_rmd = rmd)
+      paths <- c(paths, p)
+      if (isTRUE(print)) consoleReport(k, rmd = rmd)
+    }
+    return(invisible(paths))
+  }
+
+  # single country
+  if (is.null(cc)) stop("Provide cc (e.g. 76) or use all = TRUE / cc = 'all'.")
+  cc <- as.integer(cc)
+  if (is.na(cc)) stop("cc must be numeric (e.g., 76).")
+
+  p <- pdfReport(cc, out_dir = out_dir, input_rmd = rmd)
+  if (isTRUE(print)) consoleReport(cc, rmd = rmd)
+
+  invisible(p)
 }
-
-
-
-
