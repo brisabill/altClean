@@ -336,15 +336,15 @@ df_model_text <- df_models_dict %>%
 
 
 #exporting to .csv
-write.csv(df_alt_text, "alt_text.csv", row.names = FALSE)
+#write.csv(df_alt_text, "alt_text.csv", row.names = FALSE)
 
-write.csv(df_coeff_text, "coeff_text.csv", row.names = FALSE)
+#write.csv(df_coeff_text, "coeff_text.csv", row.names = FALSE)
 
-write.csv(df_model_text, "model_text.csv", row.names = FALSE)
+#write.csv(df_model_text, "model_text.csv", row.names = FALSE)
 
-write.csv(df_models_results, "df_models_results.csv")
+#write.csv(df_models_results, "df_models_results.csv")
 
-write.csv(df_models_dict, "df_models_dict.csv")
+#write.csv(df_models_dict, "df_models_dict.csv")
 
 ####PDF exports
 country_list <- df_models_dict %>%
@@ -357,15 +357,15 @@ dir.create(out_dir, showWarnings = FALSE)
 
 
 #Exports pdf reports for all countries
-for (cc in country_list) {
-  e <- new.env(parent = globalenv())   # IMPORTANT: fresh env each time
-  rmarkdown::render(
-    input = "country_report.Rmd",
-    output_file = file.path(out_dir, paste0("country_", cc, ".pdf")),
-    params = list(cc = cc),
-    envir = e
-  )
-}
+#for (cc in country_list) {
+#  e <- new.env(parent = globalenv())   # IMPORTANT: fresh env each time
+#  rmarkdown::render(
+#    input = "country_report.Rmd",
+#    output_file = file.path(out_dir, paste0("country_", cc, ".pdf")),
+#    params = list(cc = cc),
+#    envir = e
+#  )
+#}
 
 # ---- PDF helper: render ONE country on demand ----
 pdfReport <- function(cc,
@@ -388,7 +388,7 @@ pdfReport <- function(cc,
 }
 
 # Usage:
-pdfReport(76)
+#pdfReport(76)
 
 #Function to print same info asd ithe pdf but directly in the R console
 consoleReport <- function(cc, rmd = "country_report.Rmd") {
@@ -458,6 +458,7 @@ countryReport <- function(cc,
   
   invisible(pdf_path)
 }
+
 
 
 
