@@ -1,0 +1,33 @@
+library(jsonlite)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(tibble)
+library(fs)
+library(rmarkdown)
+library(knitr)
+library(tinytex)
+
+# ----Setting directories ---------
+ESTICAN_ROOT <- "C:/Users/mirandaa/Project/estican"  
+
+DICT_DIR   <- fs::path(ESTICAN_ROOT, "dict")
+RESULT_DIR <- fs::path(ESTICAN_ROOT, "result")
+
+WORK_DIR <- fs::path(ESTICAN_ROOT, "other", "json_extraction")
+OUT_DIR  <- fs::path(ESTICAN_ROOT, "other", "reports")
+
+RMD_FILE <- fs::path(WORK_DIR, "country_report.Rmd")
+
+DICT_CANCER  <- fs::path(WORK_DIR, "dict_cancer.csv")
+DICT_COUNTRY <- fs::path(WORK_DIR, "dict_country.csv")
+DICT_ICD_MAP <- fs::path(WORK_DIR, "dict_icd_map.csv")
+
+# ---Loading the dictionaries
+dict_cancer <- read.delim(DICT_CANCER, sep = ",", stringsAsFactors = TRUE) %>%
+  select(-any_of("X"))
+
+dict_country <- read.delim(DICT_COUNTRY, sep = ",", stringsAsFactors = FALSE) %>%
+  select(-any_of("X"))
+
+dict_icd_map <- read.delim(DICT_ICD_MAP, sep = ",", stringsAsFactors = FALSE)
