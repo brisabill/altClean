@@ -19,7 +19,7 @@ DICT_DIR   <- fs::path(ESTICAN_ROOT, "dict")
 RESULT_DIR <- fs::path(ESTICAN_ROOT, "result")
 
 WORK_DIR <- fs::path(ESTICAN_ROOT, "other", "json_extraction")
-OUT_DIR  <- fs::path(ESTICAN_ROOT, "other", "reports")
+OUT_DIR  <- fs::path(ESTICAN_ROOT, "other")
 
 
 DICT_CANCER  <- fs::path(WORK_DIR, "dict_cancer.csv")
@@ -140,5 +140,6 @@ ageCheck <- function(cc, comp = FALSE, year = NULL) {
   
   return(invisible(merged))
 }
+
 
 
