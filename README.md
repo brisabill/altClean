@@ -58,7 +58,8 @@ pop_pyramid(250)
 ```r
 source ("pop_inc.R)
 #Usage
-ageCheck (76)
+#ageCheck(cc, comp = FALSE, 2020 or 2022)
+ageCheck (76, 2022)
 ---
 ```
 
