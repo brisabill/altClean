@@ -37,8 +37,7 @@ dict_country <- read.delim(DICT_COUNTRY, sep = ",", stringsAsFactors = FALSE) %>
 dict_icd_map <- read.delim(DICT_ICD_MAP, sep = ",", stringsAsFactors = FALSE)
 
 
-#-------Crating the function
-# ----------Creating fuinction
+#-------Creating the function
 
 ageCheck <- function(cc, comp = FALSE, year = NULL) {
   
@@ -142,3 +141,4 @@ ageCheck <- function(cc, comp = FALSE, year = NULL) {
   
   return(invisible(merged))
 }
+
